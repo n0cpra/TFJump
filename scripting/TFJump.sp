@@ -20,7 +20,7 @@
 ConVar
 		cEnabled,						cWelcomeMsg,
 		cAdvertTimer,					cPushAway,
-		cCancel;						//cSoundBlock;
+		cCancel,						cBranch;
 Handle 
 		hsDisplayLeft, 					hsDisplayDown,
 		hsDisplayRight,					hsDisplayDJ,
@@ -50,7 +50,8 @@ int
 		iControlList[CL],				iTouched[MAX];
 char
 		SteamId[MAX][32],				MapName[MAX_NAME_LENGTH],		
-		JumpList[JMAX][128],			HostName[128];
+		JumpList[JMAX][128],			HostName[128],
+		URL[256];
 Database
 		dTFJump = null;
 Transaction
@@ -133,14 +134,15 @@ public void OnPluginStart()
 	
 	char uBranch[32];
 	cBranch.GetString(uBranch, sizeof uBranch);
-	if (!VerifyBranch(branch)) {
+	if (!VerifyBranch(uBranch))
+	{
 		cBranch.SetString(UPD_BRANCH);
-
-	Format(sURL, sizeof sURL,"%s/%s/%s", UPD_BASE, uBranch, UPD_FILE);
+	}
+	Format(URL, sizeof URL,"%s/%s/%s", UPD_BASE, uBranch, UPD_FILE);
 
 	if (LibraryExists("updater"))
 	{
-		Updater_AddPlugin(sURL);
+		Updater_AddPlugin(URL);
 	}
 	else
 	{
@@ -259,7 +261,7 @@ public void OnLibraryAdded(const char[] name)
 {
 	if (StrEqual(name, "updater"))
 	{
-		Updater_AddPlugin(g_sURLMap);
+		Updater_AddPlugin(URL);
 	}
 }
 /******************************************************
