@@ -143,6 +143,7 @@ public void OnPluginStart()
 	if (LibraryExists("updater"))
 	{
 		Updater_AddPlugin(URL);
+		DebugLog("Added URL (%s) to updater.", URL);
 	}
 	else
 	{
