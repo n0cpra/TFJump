@@ -72,7 +72,7 @@ char
 ******************************************************/
 public void OnPluginStart()
 {
-	char sBranch[32];
+	char sBranch[256];
 	RegPluginLibrary("TFJump");
 
 	CreateConVar("tf2jump_version", PLUGIN_VERSION, "TF2 Jump version", FCVAR_SPONLY|FCVAR_NOTIFY);

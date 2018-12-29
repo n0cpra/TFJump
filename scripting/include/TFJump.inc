@@ -10,7 +10,7 @@
 #define PLUGIN_AUTHOR "rush"
 #define PLUGIN_NAME "TF2 Jump"
 #define PLUGIN_DESC "A sourcemod plugin to provide a sever with utilities to aid with jumping."
-#define PLUGIN_VERSION "1.0.2"
+#define PLUGIN_VERSION "1.0.3"
 
 #define TAG	 "{aliceblue}[{cadetblue}TF{aliceblue}Jump]"
 #define T1 "{cadetblue}"
@@ -25,7 +25,7 @@
 #define JMAX 201
 #define MAX MAXPLAYERS+1
 
-#define UPD_BASE "http://raw.github.com/n0cpra/TFJump"
+#define UPD_BASE "https://raw.githubusercontent.com/n0cpra/TFJump/"
 #define UPD_BRANCH "master"
 #define UPD_FILE "updatefile.txt"
 
