@@ -10,7 +10,7 @@
 #define PLUGIN_AUTHOR "rush"
 #define PLUGIN_NAME "TF2 Jump"
 #define PLUGIN_DESC "A sourcemod plugin to provide a sever with utilities to aid with jumping."
-#define PLUGIN_VERSION "1.0.0a"
+#define PLUGIN_VERSION "1.0.1"
 
 #define TAG	 "{aliceblue}[{cadetblue}TF{aliceblue}Jump]"
 #define T1 "{cadetblue}"

@@ -264,6 +264,20 @@ public void OnLibraryAdded(const char[] name)
 		Updater_AddPlugin(URL);
 	}
 }
+public Action Updater_OnPluginChecking()
+{
+	CPrintToChatAll("%s Checking for updates...", TAG);
+	return Plugin_Continue;
+}
+public int Updater_OnPluginUpdating()
+{
+	CPrintToChatAll("%s Downloading a new update.", TAG);
+}
+public int Updater_OnPluginUpdated()
+{
+	CPrintToChatAll("%s Finished updating. %sReloading%s TFJump.", TAG, T1, T2);
+	ReloadPlugin(INVALID_HANDLE);
+}
 /******************************************************
 					Chat Commands					  *
 ******************************************************/
@@ -560,6 +574,7 @@ void DoAdmin(int client)
 		RootMenu.DrawItem("Bring Player", ITEMDRAW_DISABLED);
 		RootMenu.DrawItem("Teleport Player");
 		RootMenu.DrawItem("Reload Plugin");
+		RootMenu.DrawItem("Update Plugin");
 		RootMenu.DrawItem("[+] Map Settings");
 		RootMenu.DrawItem("", ITEMDRAW_SPACER);
 		RootMenu.DrawItem("Help");
@@ -763,11 +778,15 @@ public int OnRootMenu(Menu menu, MenuAction action, int client, int setting)
 				}
 				case 4: // Reload Plugin
 				{
-					//ReloadPlugin();
+					ReloadPlugin(INVALID_HANDLE);
 				}
 				case 5:
 				{
-					DoMapSettings(client);	
+					Updater_ForceUpdate();
+				}
+				case 6:
+				{
+					DoMapSettings(client);
 				}
 			}
 		}
