@@ -4,7 +4,7 @@
 	{
 		"Version"
 		{
-			"Latest"			"1.0.0-BETA"
+			"Latest"			"1.0.1"
 		}
 	}
 
@@ -13,6 +13,6 @@
 		"Plugin"				"Path_SM/plugins/TFJump.smx"
 		
 		"Source"				"Path_SM/scripting/TFJump.sp"
-		"Source"				"Path_SM/scripting/jumpassist/include/TFJump.inc"
+		"Source"				"Path_SM/scripting/include/TFJump.inc"
 	}
 }

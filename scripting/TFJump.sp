@@ -2010,7 +2010,7 @@ public Action OnPlayerTouchRegen(int entity, int other)
 }
 Action OnIntelStartTouch(int entity, int other)
 {
-	if (IsValidEntity(entity) && IsValidClient(other) && bIsPreviewing[other])
+	if (IsValidEntity(entity) && bIsPreviewing[other])
 	{
 		AcceptEntityInput(entity, "Disable");
 		return Plugin_Continue;
@@ -2019,7 +2019,7 @@ Action OnIntelStartTouch(int entity, int other)
 }
 Action OnIntelEndTouch(int entity, int other)
 {
-	if (IsValidEntity(entity) && IsValidClient(other) && bIsPreviewing[other])
+	if (IsValidEntity(entity) && bIsPreviewing[other])
 	{
 		AcceptEntityInput(entity, "Enable");
 		return Plugin_Continue;
