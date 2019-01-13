@@ -1,18 +1,12 @@
 /*
 		TODO List
-		DoGoto, Send player, Bring player (admin menus), DoHelp, delcaps, dostats
+		Admin Commands: Send player, Bring player, delcaps
+		Player Commands: DoHelp, DoStats
+		
 		DB Stuff left:
-		3. Delete locations in db.
-		Combine speedrank into this.
-		Check if spawn triggers on changing team to spec
-		Do the same for explosions.
-		/goto timer lock
-		
-		Re-do jumplist menu to use the data from the DB.
-		SQL for jumplist order by x * 1
-		
-		Re-work capture point stuff. So broken ass maps with broken ass cp's will work as well as ones with working CP's.
-		1. Change to finding team_control_point in PreGame, if none use  OnStartTouchBrokenCP event.
+		Delete teleport locations from DB.
+
+		L 1069 delete save from DB.
 */
 #include <TFJump>
 #pragma newdecls required;
@@ -20,7 +14,7 @@
 ConVar
 		cEnabled,						cWelcomeMsg,
 		cAdvertTimer,					cPushAway,
-		cCancel,						cBranch;
+		cCancel,						cSoundBlock;
 Handle 
 		hsDisplayLeft, 					hsDisplayDown,
 		hsDisplayRight,					hsDisplayDJ,
@@ -34,24 +28,25 @@ bool
 		bUsedReset[MAX],				bTouchedFake[MAX][CL],
 		bIsPreviewing[MAX],				bHardcore[MAX],
 		bSpeedRun[MAX],					bBeatMap[MAX],
-		bSounds[MAX][SND],				bConnected = false,
-		bTouched[MAX][CL],				bEvent = true;
+		bTouched[MAX][CL],				bEvent = true,
+		bHasRecord[MAX],				cmdLock[Commands][MAX];
 float
 		pOrigin[MAX][3],				pAngles[MAX][3],
-		fOrigin[MAX][3],				fAngles[MAX][3],
+		//fOrigin[MAX][3],				fAngles[MAX][3],
 		fLastSavePos[MAX][3],			fLastSaveAngles[MAX][3],
 		fJumpList[JMAX][3],				afJumpList[JMAX][3],
-		fVelocity[3] = { 0.0, ... };
+		fVelocity[3] = { 0.0, ... },	SaveList[MAX][TCLASS][5][4],
+		fLock = 20.0;
 int
 		iControlPoints = 0,				iButtons[MAX],
-		iForceTeam = 0,					pMaxClip[MAX][3],
+		iForceTeam = 0,					iMaxClip[MAX][3],
 		iClass = 0,						iDiff,
 		iJumps = 0,						iAdvertCount,
-		iControlList[CL],				iTouched[MAX];
+		iControlList[CL],				iTouched[MAX],
+		iSaveList[MAX];
 char
-		SteamId[MAX][32],				MapName[MAX_NAME_LENGTH],		
-		JumpList[JMAX][128],			HostName[128],
-		URL[256];
+		SteamId[MAX][32],				MapName[MAX_NAME_LENGTH],
+		JumpList[JMAX][128],			HostName[128];
 Database
 		dTFJump = null;
 Transaction
@@ -72,16 +67,13 @@ char
 ******************************************************/
 public void OnPluginStart()
 {
-	char sBranch[256];
 	RegPluginLibrary("TFJump");
 
-	CreateConVar("tf2jump_version", PLUGIN_VERSION, "TF2 Jump version", FCVAR_SPONLY|FCVAR_NOTIFY);
+	CreateConVar("tf2jump_version", PLUGIN_VERSION, "TF2 Jump version", FCVAR_DONTRECORD|FCVAR_SPONLY);
 	cEnabled = CreateConVar("tfjump_enable", "1", "Turns TF2 Jump on/off.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 	cWelcomeMsg = CreateConVar("tfjump_welcomemsg", "1", "Show clients the welcome message when they join?", FCVAR_NOTIFY, true, 0.0, true, 1.0);
-	//cSoundBlock = CreateConVar("tfjump_sounds", "1", "Block pain, regenerate, and ammo pickup sounds?", FCVAR_NOTIFY, true, 0.0, true, 1.0);
-	cAdvertTimer = CreateConVar("tfjump_time", "3", "Sets the time for advertisement in minutes. (0 to disable.)", FCVAR_NOTIFY, true, 0.0, true, 5.0);
-	Format(sBranch, sizeof sBranch, "Select a branch folder from %s to update from.", UPD_BASE);
-	cBranch = CreateConVar("tfjump_branch", UPD_BRANCH, sBranch, FCVAR_NOTIFY);
+	cSoundBlock = CreateConVar("tfjump_sounds", "1", "Block sounds for a more enjoably jumping experience?", FCVAR_NOTIFY, true, 0.0, true, 1.0);
+	cAdvertTimer = CreateConVar("tfjump_time", "0", "Sets the time for advertisement in minutes. (0 to disable.)", FCVAR_NOTIFY, true, 0.0, true, 5.0);
 	
 	RegConsoleCmd("sm_save", cmdSave, "Saves your current location. (Same As: sm_s)");
 	RegConsoleCmd("sm_s", cmdSave, "Saves your current position.");
@@ -128,27 +120,10 @@ public void OnPluginStart()
 	cPushAway = FindConVar("tf_avoidteammates_pushaway");
 	
 	AddCommandListener(DoJoinTeam, "jointeam");
-	
-	// Connect to our database.
+
 	Database.Connect(OnDatabaseConnect, "TFJump");
 	
-	char uBranch[32];
-	cBranch.GetString(uBranch, sizeof uBranch);
-	if (!VerifyBranch(uBranch))
-	{
-		cBranch.SetString(UPD_BRANCH);
-	}
-	Format(URL, sizeof URL,"%s/%s/%s", UPD_BASE, uBranch, UPD_FILE);
-
-	if (LibraryExists("updater"))
-	{
-		Updater_AddPlugin(URL);
-		DebugLog("Added URL (%s) to updater.", URL);
-	}
-	else
-	{
-		LogMessage("Updater plugin not found.");
-	}
+	AutoExecConfig(true, "TFJump", "sourcemod");
 }
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max) 
 {
@@ -197,7 +172,7 @@ public void OnMapStart()
 		// Precache cap sounds
 		PrecacheSound("misc/tf_nemesis.wav");
 		PrecacheSound("misc/freeze_cam.wav");
-		PrecacheSound("misc/null.wav");
+		//PrecacheSound("misc/null.wav");
 		
 		GetCurrentMap(MapName, sizeof MapName);
 
@@ -237,7 +212,7 @@ public void OnClientPutInServer(int client)
 	{
 		if (IsValidClient(client))
 		{
-			if (bConnected)
+			if (IsDatabaseConnected())
 			{ 
 				CreateTimer(0.7, tProfile, client);
 			}
@@ -257,27 +232,6 @@ public void OnClientDisconnect(int client)
 	{
 		ResetPlayer(client);
 	}
-}
-public void OnLibraryAdded(const char[] name)
-{
-	if (StrEqual(name, "updater"))
-	{
-		Updater_AddPlugin(URL);
-	}
-}
-public Action Updater_OnPluginChecking()
-{
-	CPrintToChatAll("%s Checking for updates...", TAG);
-	return Plugin_Continue;
-}
-public int Updater_OnPluginUpdating()
-{
-	CPrintToChatAll("%s Downloading a new update.", TAG);
-}
-public int Updater_OnPluginUpdated()
-{
-	CPrintToChatAll("%s Finished updating. %sReloading%s TFJump.", TAG, T1, T2);
-	ReloadPlugin(INVALID_HANDLE);
 }
 /******************************************************
 					Chat Commands					  *
@@ -318,14 +272,24 @@ Action cmdDoUndo(int client, int args)
 {
 	if (cEnabled.BoolValue)
 	{
+		if (bNoSteamId[client])
+		{
+			CPrintToChat(client, "%s You can't use this command until we retrieve your Steam Id.", TAG);
+			return Plugin_Handled;
+		}
 		DoUndo(client);
 	}
+	return Plugin_Handled;
 }
-// Menu
 Action cmdSettings(int client, int args)
 {
 	if (cEnabled.BoolValue)
 	{
+		if (bNoSteamId[client])
+		{
+			CPrintToChat(client, "%s You can't use this command until we retrieve your Steam Id.", TAG);
+			return Plugin_Handled;
+		}
 		DoSettings(client);
 	}
 	return Plugin_Handled;	
@@ -336,10 +300,15 @@ Action cmdGoto(int client, int args)
 	{
 		if (bIsPreviewing[client] || IsClientObserver(client))
 		{
-			CPrintToChat(client, "%s Command is %slocked%s.", TAG, T1, T2);
+			CPrintToChat(client, "%s Goto is %sdisabled%s while previewing.", TAG, T1, T2);
 			return Plugin_Handled;
 		}
-		if (IsUserAdmin(client))
+		if (cmdLock[Goto][client])
+		{
+			CPrintToChat(client, "%s Goto has been %sdisabled%s for %f seconds", TAG, T1, T2, fLock);
+			return Plugin_Handled;
+		}
+		if (IsUserAdmin(client) || bBeatMap[client])
 		{
 			if (args < 1)
 			{
@@ -348,7 +317,7 @@ Action cmdGoto(int client, int args)
 			}
 			if (IsClientObserver(client))
 			{
-				CReplyToCommand(client, "%s Can't target players in %sspectate%s.", TAG, T1, T2);
+				CReplyToCommand(client, "%s Can't use this as a %sspectator%s.", TAG, T1, T2);
 				return Plugin_Handled;
 			}
 
@@ -399,6 +368,12 @@ Action cmdGoto(int client, int args)
 				TeleportEntity(client, TeleportOrigin, goAngle, goPosVec);
 				CPrintToChat(client, "%s You have been teleported to %s%s%s.", TAG, T1, target_name, T2);
 				CPrintToChat(target_list[i], "%s %s%N%s has teleported to your location", TAG, T1, client, T2);
+
+				cmdLock[Goto][client] = true;
+				DataPack dp;
+				CreateDataTimer(fLock, tcmdLock, dp);
+				dp.WriteCell(client);
+				dp.WriteCell(0);
 			}
 		} else {
 			CReplyToCommand(client, "%s You %sdo not%s have access to this command.", TAG, T1, T2);
@@ -428,7 +403,7 @@ Action cmdCheckStats(int client, int args)
 {
 	if (cEnabled.BoolValue)
 	{
-		//DoStats(client);
+		DoStats(client);
 	}
 	return Plugin_Handled;	
 }
@@ -499,31 +474,58 @@ Action cmdAdminMenu(int client, int args)
 ******************************************************/
 void DebugLog(char[] text, any ...)
 {
-	char path[PLATFORM_MAX_PATH], date[32], time[32];
+	char path[PLATFORM_MAX_PATH], date[32], date2[32], time[32];
 
-	FormatTime(date, sizeof date, "%m-%d-%y", GetTime());
+	FormatTime(date, sizeof date, "%m%d%y", GetTime());
+	FormatTime(date2, sizeof date2, "%m/%d/%y", GetTime());
 	FormatTime(time, sizeof time, "%I:%M:%S", GetTime());
-	BuildPath(Path_SM, path, PLATFORM_MAX_PATH, "logs/TFJump-Log-%s.log", date);
+	BuildPath(Path_SM, path, PLATFORM_MAX_PATH, "logs/TFJump%s.log", date);
 
 	int len = strlen(text) + 255;
 	char[] text2 = new char[len];
 	VFormat(text2, len, text, 2);
-	PrintToServer("%s %s", time, text2);
+	PrintToServer("L %s %s - %s", date2, time, text2);
 
 	if (!FileExists(path))
 	{
-		File log = OpenFile(path, "w");
-		log.WriteLine("----- TFJump log [Time:%s] [Date:%s] -----" , time, date);
+		File log = OpenFile(path, "wt");
+		log.WriteLine("----- TFJump log [Time:%s] [Date:%s] -----" , time, date2);
 		log.WriteLine("Plugin Name: %s", PLUGIN_NAME);
 		log.WriteLine("Plugin Version: %s", PLUGIN_VERSION);
 		log.WriteLine("Plugin Author: %s", PLUGIN_AUTHOR);
-		log.WriteLine("[%s] %s", time, text2);
+		log.WriteLine("----- Log Started -----");
+		log.WriteLine("L %s - %s: %s", date2, time, text2);
 		log.Close();
 	} else {
-		File log = OpenFile(path, "a");
-		log.WriteLine("[%s] %s", time, text2);
+		File log = OpenFile(path, "at");
+		log.WriteLine("L %s - %s: %s", date2, time, text2);
 		log.Close();
 	}
+}
+stock void UploadSaves(bool all = false, int client = 0)
+{
+	if (all)
+	{
+		for (int i=1;i<=MaxClients;i++)
+		{
+			if (IsValidClient(i))
+			{
+				DebugLog("Saving all saves.", client);
+				char query[512];
+				dTrans.Format(query, sizeof query, "")
+				dTrans.AddQuery(query);
+			}
+		}
+	} 
+	else 
+	{
+		if (client != 0)
+		{
+			DebugLog("Saving all saves for %N.", client);
+		}
+	}
+	dTFJump.Execute(dTrans);
+	DebugLog("Done saving player saves to database.");
 }
 void DoSettings(int client)
 {
@@ -532,7 +534,7 @@ void DoSettings(int client)
 	SettingsMenu.SetTitle("TF2 Jump Settings");
 	SettingsMenu.DrawItem("[+] Regen");
 	SettingsMenu.DrawItem("[+] Messages");
-	SettingsMenu.DrawItem("[+] Sounds");
+	SettingsMenu.DrawItem("[+] Sounds", ITEMDRAW_DISABLED);
 	Format(info, sizeof info, "Hardcore: %s", (bHardcore[client]?"On":"Off"));
 	SettingsMenu.DrawItem(info);
 	SettingsMenu.DrawItem("", ITEMDRAW_SPACER);
@@ -575,7 +577,7 @@ void DoAdmin(int client)
 		RootMenu.DrawItem("Bring Player", ITEMDRAW_DISABLED);
 		RootMenu.DrawItem("Teleport Player");
 		RootMenu.DrawItem("Reload Plugin");
-		RootMenu.DrawItem("Update Plugin");
+		RootMenu.DrawItem("Update Plugin", ITEMDRAW_DISABLED);
 		RootMenu.DrawItem("[+] Map Settings");
 		RootMenu.DrawItem("", ITEMDRAW_SPACER);
 		RootMenu.DrawItem("Help");
@@ -623,41 +625,13 @@ void DoMessages(int client)
 	MessagesMenu.DrawItem("Go Back");
 	MessagesMenu.DrawItem("Exit");
 	MessagesMenu.Send(client, OnMessagesMenu, MENU_TIME_FOREVER);
-	delete MessagesMenu;	
-}
-void DoSounds(int client)
-{
-	Panel SoundsMenu = new Panel();
-	SoundsMenu.SetTitle("Toggle Sounds");
-	char info[20];
-	Format(info, sizeof info, "Fall: %s", (bSounds[client][SND_FALL]?"Sound On":"Sound Off"));
-	SoundsMenu.DrawItem(info);
-	Format(info, sizeof info, "Pain: %s", (bSounds[client][SND_PAIN]?"Sound On":"Sound Off"));
-	SoundsMenu.DrawItem(info);
-	Format(info, sizeof info, "Flesh: %s", (bSounds[client][SND_FLESH]?"Sound On":"Sound Off"));
-	SoundsMenu.DrawItem(info);
-	Format(info, sizeof info, "Regen: %s", (bSounds[client][SND_REGEN]?"Sound On":"Sound Off"));
-	SoundsMenu.DrawItem(info);
-	Format(info, sizeof info, "Jump: %s", (bSounds[client][SND_JUMP]?"Sound On":"Sound Off"));
-	SoundsMenu.DrawItem(info);
-	SoundsMenu.DrawItem("", ITEMDRAW_SPACER);
-	SoundsMenu.DrawItem("Help");
-	SoundsMenu.DrawItem("", ITEMDRAW_SPACER);
-	SoundsMenu.DrawItem("Go Back");
-	SoundsMenu.DrawItem("Exit");
-	SoundsMenu.Send(client, OnSoundsMenu, MENU_TIME_FOREVER);
-	delete SoundsMenu;
+	delete MessagesMenu;
 }
 void DoJumpList(int client)
 {
-	// Replace w/ SQL later on.
-	Menu mJumpList = new Menu(OnJumpList);
-	mJumpList.SetTitle("Select a jump");
-	for (int i=0;i<=iJumps;i++)
-	{
-		mJumpList.AddItem(JumpList[i], JumpList[i]);
-	}
-	mJumpList.Display(client, MENU_TIME_FOREVER);
+	char query[512];
+	dTFJump.Format(query, sizeof query, "SELECT * FROM `Teleports` WHERE Map = '%s'ORDER BY Name * 1", MapName);
+	dTFJump.Query(OnJumpListCreate, query, client);
 }
 void DoMapSettings(int client)
 {
@@ -779,11 +753,11 @@ public int OnRootMenu(Menu menu, MenuAction action, int client, int setting)
 				}
 				case 4: // Reload Plugin
 				{
-					ReloadPlugin(INVALID_HANDLE);
+					
 				}
 				case 5:
 				{
-					Updater_ForceUpdate();
+					
 				}
 				case 6:
 				{
@@ -873,7 +847,7 @@ public int OnSettingsMenu(Menu menu, MenuAction action, int client, int setting)
 		}
 		case 3:
 		{
-			DoSounds(client);
+			
 		}
 		case 4:
 		{
@@ -928,70 +902,6 @@ public int OnMessagesMenu(Menu menu, MenuAction action, int client, int setting)
 				case 10:
 				{
 					UpdateProfile(client, 1);
-				}
-			}
-		}
-	}
-}
-public int OnSoundsMenu(Menu menu, MenuAction action, int client, int setting)
-{
-	switch (action)
-	{
-		case MenuAction_Select:
-		{
-			switch (setting)
-			{
-				case 1:
-				{
-					if (bSounds[client][SND_FALL])
-						bSounds[client][SND_FALL] = false;
-					else
-						bSounds[client][SND_FALL] = true;
-					DoSounds(client);				
-				}
-				case 2:
-				{
-					if (bSounds[client][SND_PAIN])
-						bSounds[client][SND_PAIN] = false;
-					else
-						bSounds[client][SND_PAIN] = true;
-					DoSounds(client);
-				}
-				case 3:
-				{
-					if (bSounds[client][SND_FLESH])
-						bSounds[client][SND_FLESH] = false;
-					else
-						bSounds[client][SND_FLESH] = true;
-					DoSounds(client);
-				}
-				case 4:
-				{
-					if (bSounds[client][SND_REGEN])
-						bSounds[client][SND_REGEN] = false;
-					else
-						bSounds[client][SND_REGEN] = true;
-					DoSounds(client);
-				}
-				case 5:
-				{
-					if (bSounds[client][SND_JUMP])
-						bSounds[client][SND_JUMP] = false;
-					else
-						bSounds[client][SND_JUMP] = true;
-					DoSounds(client);
-				}
-				case 7:
-				{
-					//DoHelp(client);	
-				}
-				case 9:
-				{
-					DoSettings(client);	
-				}
-				case 10:
-				{
-					UpdateProfile(client, 2);
 				}
 			}
 		}
@@ -1090,12 +1000,18 @@ void DoSave(int client)
 			CPrintToChat(client, "%s You can't save while ducked.", TAG);
 		else
 		{
-			fLastSavePos[client][0] = fOrigin[client][0]; fLastSaveAngles[client][0] = fAngles[client][0];
-			fLastSavePos[client][1] = fOrigin[client][1]; fLastSaveAngles[client][1] = fAngles[client][1];
-			fLastSavePos[client][2] = fOrigin[client][2]; fLastSaveAngles[client][2] = fAngles[client][2];
-	
-			GetClientAbsOrigin(client, fOrigin[client]);
-			GetClientAbsAngles(client, fAngles[client]);
+			int team = view_as<int>(TF2_GetClientTeam(client)), class = view_as<int>(TF2_GetPlayerClass(client));
+			fLastSavePos[client][0] = SaveList[client][class][team][0]; fLastSaveAngles[client][0] = 0.0;
+			fLastSavePos[client][1] = SaveList[client][class][team][1]; fLastSaveAngles[client][1] = SaveList[client][class][team][3];
+			fLastSavePos[client][2] = SaveList[client][class][team][2]; fLastSaveAngles[client][2] = 0.0;
+
+			float f[3], a[3];
+			GetClientAbsOrigin(client, f); GetClientAbsAngles(client, a);
+
+			SaveList[client][class][team][0] = f[0];
+			SaveList[client][class][team][1] = f[1];
+			SaveList[client][class][team][2] = f[2];
+			SaveList[client][class][team][3] = a[1];
 			if (IsDatabaseConnected()) { SaveDB(client); }
 			if (bMessages[client][Msg_Saved])
 			{
@@ -1108,12 +1024,15 @@ void DoUndo(int client)
 {
 	if (!bHardcore[client])
 	{
-		if (fLastSavePos[client][0] == 0.0 || fOrigin[client][0] == 0.0)
+		int team = view_as<int>(TF2_GetClientTeam(client)), class = view_as<int>(TF2_GetPlayerClass(client));
+		if (fLastSavePos[client][0] == 0.0 || SaveList[client][class][team][0] == 0.0)
 			CPrintToChat(client, "%s You don't have a current save, or a last save.", TAG);
 		else
 		{
-			fOrigin[client][0] = fLastSavePos[client][0]; fOrigin[client][1] = fLastSavePos[client][1]; fOrigin[client][2] = fLastSavePos[client][2];
-			fAngles[client][0] = fLastSaveAngles[client][0]; fAngles[client][1] = fLastSaveAngles[client][1]; fAngles[client][2] = fLastSaveAngles[client][2];
+			SaveList[client][class][team][0] = fLastSavePos[client][0];
+			SaveList[client][class][team][1] = fLastSavePos[client][1];
+			SaveList[client][class][team][2] = fLastSavePos[client][2];
+			SaveList[client][class][team][3] = fLastSaveAngles[client][1];
 			CPrintToChat(client, "%s Your save has been %sreverted%s.", TAG, T1, T2);
 		}
 	} else {
@@ -1141,13 +1060,13 @@ void DeleteSave(int client)
 {
 	if (IsValidClient(client))
 	{
-		for (int i=0;i<3;i++)
+		int team = view_as<int>(TF2_GetClientTeam(client)), class = view_as<int>(TF2_GetPlayerClass(client));
+		for (int i=0;i<4;i++)
 		{
-			fOrigin[client][i] = 0.0;
-			fAngles[client][i] = 0.0;
-			fLastSavePos[client][i] = 0.0;
-			fLastSaveAngles[client][i] = 0.0;
+			SaveList[client][class][team][i] = 0.0;
 		}
+		fLastSavePos[client][0] = 0.0, fLastSavePos[client][1] = 0.0, fLastSavePos[client][2] = 0.0;
+		fLastSaveAngles[client][0] = 0.0, fLastSaveAngles[client][1] = 0.0, fLastSaveAngles[client][2] = 0.0;
 		if (IsDatabaseConnected())
 		{
 			// Do db	
@@ -1164,17 +1083,43 @@ void DoTeleport(int client)
 			CPrintToChat(client, "%s You can't teleport while in a %shardcore%s run.", TAG, T1, T2);
 			else if (!IsPlayerAlive(client))
 				CPrintToChat(client, "%s You can't teleport while dead.", TAG);
-			else if (fOrigin[client][0] == 0.0)
+			else if (!ClientHasSave(client))
 				CPrintToChat(client, "%s You don't have a save.", TAG);
 			else
 			{
-				TeleportEntity(client, fOrigin[client], fAngles[client], fVelocity);
+				TeleportEntity(client, GetClientSave(client, false), GetClientSave(client, true), fVelocity);
 				if (bMessages[client][Msg_Teleport])
 				{
 					CPrintToChat(client, "%s %sTeleported%s to your save.", TAG, T1, T2);
 				}
 			}
 		}
+	}
+}
+bool ClientHasSave(int client)
+{
+	int team = view_as<int>(TF2_GetClientTeam(client)), class = view_as<int>(TF2_GetPlayerClass(client));
+	if (SaveList[client][class][team][0] && SaveList[client][class][team][1] && SaveList[client][class][team][2] == 0.0) 
+		return false;
+	else 
+		return true;
+}
+float GetClientSave(int client, bool angles = false)
+{
+	int team = view_as<int>(TF2_GetClientTeam(client)), class = view_as<int>(TF2_GetPlayerClass(client));
+	if (angles)
+	{
+		float angle[3];
+		angle[0] = 0.0;
+		angle[1] = SaveList[client][class][team][3];
+		angle[2] = 0.0;
+		return angle;
+	} else {
+		float origin[3];
+		origin[0] = SaveList[client][class][team][0];
+		origin[1] = SaveList[client][class][team][1];
+		origin[2] = SaveList[client][class][team][2];
+		return origin;		
 	}
 }
 void ResetPlayer(int client)
@@ -1186,9 +1131,7 @@ void ResetPlayer(int client)
 		bSpeedRun[client] = false;					bMessages[client][Msg_Saved] = true;
 		bMessages[client][Msg_Teleport] = true;		bGetClientKeys[client] = false;
 		bUsedReset[client] = false;					iTouched[client] = 0,
-		bSounds[client][SND_FALL] = false,			bSounds[client][SND_PAIN] = false,
-		bSounds[client][SND_REGEN] = false,			bSounds[client][SND_FLESH] = false,
-		bSounds[client][SND_JUMP] = false,			bSounds[client][SND_AMMO] = false;
+		iSaveList[client] = 0;
 		for (int i=0;i<32;i++)
 		{
 			bTouched[client][i] = false;
@@ -1281,10 +1224,6 @@ void CheckTeams()
 		}
 	}
 }
-bool VerifyBranch(char[] branch)
-{
-	return (!strcmp(branch, "master") || !strcmp(branch, "dev"));
-}
 void DoHooks(int Type, any data = 0)
 {
 	switch (Type)
@@ -1370,11 +1309,11 @@ public Action OnPlayerRunCmd(int client, int& buttons, int& impulse, float vel[3
 			}
 			bool Duck = view_as<bool>(iButtons[client] & IN_DUCK), Jump = view_as<bool>(iButtons[client] & IN_JUMP);
 			SetHudTextParams(0.57, 0.46, 0.3, 255, 0, 0, 255, 0, 0.0, 0.0, 0.0);
-			ShowSyncHudText(i, hsDisplayDJ, "%s %s", (Duck?"Duck":""), (Jump?"Jump":""));
+			ShowSyncHudText(i, hsDisplayDJ, "%s\n%s", (Duck?"Duck":""), (Jump?"Jump":""));
 			
 			bool M1 = view_as<bool>(iButtons[client] & IN_ATTACK), M2 = view_as<bool>(iButtons[client] & IN_ATTACK2);
 			SetHudTextParams(0.47, 0.56, 0.3, 255, 0, 0, 255, 0, 0.0, 0.0, 0.0);
-			ShowSyncHudText(i, hsDisplayM1M2, "%s %s", (M1?"M1":""), (M2?"M2":""));
+			ShowSyncHudText(i, hsDisplayM1M2, "%s\n%s", (M1?"M1":""), (M2?"M2":""));
 		}
 	}
 
@@ -1403,43 +1342,40 @@ void Regen(int client)
 		} 
 		if (bRegen[client][Ammo] && !bHardcore[client])
 		{
+			int iWeapon[3];
+			iWeapon[Primary] = GetPlayerWeaponSlot(client, 0);
+			iWeapon[Secondary] = GetPlayerWeaponSlot(client, 1);
+			iWeapon[Melee] = GetPlayerWeaponSlot(client, 2);
 			
-			int iWeaponP = GetPlayerWeaponSlot(client, 0);
-			int iWeaponS = GetPlayerWeaponSlot(client, 1);
-			int iWeaponM = GetPlayerWeaponSlot(client, 2);
-			
-			if (!IsValidWeapon(iWeaponP) || !IsValidWeapon(iWeaponS) || !IsValidWeapon(iWeaponM))
+			if (!IsValidWeapon(iWeapon[Primary]) || !IsValidWeapon(iWeapon[Secondary]) || !IsValidWeapon(iWeapon[Melee]))
 			{
-				// Spams error log on certain occasions
-				//DebugLog("Got Invalid weapon for (%i/%i/%i) %N", iWeaponP, iWeaponS, iWeaponM, client);
 				return;
 			}
-			// Bulk weapon reloading..
-			if (GetClip(client, iWeaponP != pMaxClip[client][Primary]))
+
+			if (GetEntProp(iWeapon[Primary], Prop_Send, "m_iItemDefinitionIndex") != 730)
 			{
-				SetClip(iWeaponP, pMaxClip[client][Primary]);
-			} 
-			if (GetClip(client, iWeaponS != pMaxClip[client][Secondary]))
-			{
-				SetClip(iWeaponS, pMaxClip[client][Secondary]);
+				if (GetClip(client, iWeapon[Primary] != iMaxClip[client][Primary]))
+				{
+					SetClip(iWeapon[Primary], iMaxClip[client][Primary]);
+				} 
+				if (GetClip(client, iWeapon[Secondary] != iMaxClip[client][Secondary]))
+				{
+					SetClip(iWeapon[Secondary], iMaxClip[client][Secondary]);
+				}
 			}
 			GivePlayerAmmo(client, 200, 1, false);
 			GivePlayerAmmo(client, 200, 2, false);
 			// Primary weapons
-			switch(GetEntProp(iWeaponP, Prop_Send, "m_iItemDefinitionIndex"))
+			switch(GetEntProp(iWeapon[Primary], Prop_Send, "m_iItemDefinitionIndex"))
 			{
 				// Cow mangler support
 				case 441:
 				{
-					SetEntPropFloat(iWeaponP, Prop_Send, "m_flEnergy", 100.0);
-				}
-				// Beggars
-				case 730:
-				{
+					SetEntPropFloat(iWeapon[Primary], Prop_Send, "m_flEnergy", 100.0);
 				}
 			}
 			// Melee weapons
-			switch(GetEntProp(iWeaponM, Prop_Send, "m_iItemDefinitionIndex"))
+			switch(GetEntProp(iWeapon[Melee], Prop_Send, "m_iItemDefinitionIndex"))
 			{
 				default:{}
 			}
@@ -1545,7 +1481,7 @@ void AutoList_Upload()
 	if (iJumps > 0)
 	{
 		dTFJump.Execute(dTrans);
-		DebugLog("Executing bulk SQL insert for AutoList()");
+		DebugLog("Executing SQL transaction for AutoList.");
 	}
 }
 void Override(int ent)
@@ -1690,7 +1626,7 @@ stock void DelCaps(int client)
 {
 
 }
-stock void DoInfo(int client)
+void DoInfo(int client)
 {
 	CPrintToChat(client, "%s This map is designed for %s%s%s, and has a difficulty rating of %s%s%s.", TAG, T1, GetInfo(2, iClass), T2, T1, GetInfo(3, iDiff), T2);
 }
@@ -1730,6 +1666,35 @@ bool IsValidClient(int client) { return (1 <= client <= MaxClients && IsClientIn
 /******************************************************
 					Timers							  *
 ******************************************************/
+Action tcmdLock(Handle timer, DataPack dp)
+{
+	dp.Reset();
+	int client = dp.ReadCell(), cmd = dp.ReadCell();
+	
+	/*
+				Command List
+		0: Goto
+		1: Save
+		2: Tele
+		3: Undo
+		4: Stats
+		5: Res
+		6: Restart
+		7: Info
+		8: Preview
+	*/
+	switch (cmd)
+	{
+		case 0:
+		{
+			cmdLock[Goto][client] = false;
+		}
+		case 1:
+		{
+			cmdLock[Save][client] = false;
+		}
+	}
+}
 Action tWelcome(Handle timer, any client)
 {
 	if (IsValidClient(client))
@@ -1742,6 +1707,7 @@ Action tProfile(Handle timer, any client)
 	if (IsValidClient(client))
 	{
 		Profile(client);
+		LoadDB(client);
 	}
 }
 Action tAdverts(Handle timer, any client)
@@ -1756,16 +1722,16 @@ Action tRespawn(Handle timer, any client)
 {
 	if (IsValidClient(client) && IsClientInWorld(client))
 	{
+		int class = view_as<int>(TF2_GetPlayerClass(client)), team = view_as<int>(TF2_GetClientTeam(client));
 		if (TF2_GetClientTeam(client) != TFTeam_Spectator)
 		{
-			TF2_RespawnPlayer(client);
-			if (!bUsedReset[client])
-			{
-				if (fOrigin[client][0] != 0.0)
-					TeleportEntity(client, fOrigin[client], fAngles[client], fVelocity);
-			} else {
-				bUsedReset[client] = false;	
-			}
+			float f[3], a[3];
+			f[0] = SaveList[client][class][team][0], a[0] = 0.0; 
+			f[1] = SaveList[client][class][team][1], a[1] = SaveList[client][class][team][3];
+			f[2] = SaveList[client][class][team][2], a[2] = 0.0;
+	
+			if (SaveList[client][class][team][0] != 0.0)
+				TeleportEntity(client, f, a, fVelocity);
 		}
 	}
 }
@@ -1793,7 +1759,7 @@ Action tSteamId(Handle timer, any client)
 }
 Action tMapStart(Handle timer, any client)
 {
-	if (bConnected)
+	if (IsDatabaseConnected())
 		CheckMapSettings();
 }
 /******************************************************
@@ -1810,7 +1776,6 @@ Action DoJoinTeam(int client, const char[] cmd, int args)
 		} else if (strcmp(arg1, "red") == 0 && iForceTeam == TEAM_BLUE) {
 			if (iClass != 0 && TF2_GetClientTeam(client) == TFTeam_Spectator)
 			{
-				LoadDB(client);
 				ChangeClientTeam(client, TEAM_BLUE);
 				TF2_SetPlayerClass(client, view_as<TFClassType>(iClass), true, true);
 			} else {
@@ -1820,7 +1785,6 @@ Action DoJoinTeam(int client, const char[] cmd, int args)
 		} else if (strcmp(arg1, "blue") == 0 && iForceTeam == TEAM_RED) {
 			if (iClass != 0 && TF2_GetClientTeam(client) == TFTeam_Spectator)
 			{
-				LoadDB(client);
 				ChangeClientTeam(client, TEAM_RED);
 				TF2_SetPlayerClass(client, view_as<TFClassType>(iClass), true, true);	
 			} else {
@@ -1833,32 +1797,15 @@ Action DoJoinTeam(int client, const char[] cmd, int args)
 	}
 	return Plugin_Continue;
 }
-bool BlockSound(int client, char[] Sample)
-{
-	if (strcmp(Sample, "regenerate") == 0 && !bSounds[client][SND_REGEN])
-		return true;
-	else if (strcmp(Sample, "ammo_pickup") == 0 && !bSounds[client][SND_AMMO])
-		return true;
-	else if (strcmp(Sample, "pain") == 0 && !bSounds[client][SND_PAIN])
-		return true;
-	else if (strcmp(Sample, "fall_damage") == 0 && !bSounds[client][SND_FALL])
-		return true;
-	else if (strcmp(Sample, "grenade_jump") == 0 && !bSounds[client][SND_JUMP])
-		return true;
-	else if (strcmp(Sample, "fleshbreak") == 0 && !bSounds[client][SND_FLESH])
-		return true;
-	else
-		return false;
-}
 public Action sound_hook(int clients[64], int& numClients, char[] sample, int& entity, int& channel, float& volume, int& level, int& pitch, int& flags)
 {
-	if (cEnabled.BoolValue )
+	if (cEnabled.BoolValue && cSoundBlock.BoolValue)
 	{
 		for (int j=0;j<=numClients;j++)
 		{
 			for (int i=0;i<=sizeof(SoundHook)-1;i++)
 			{
-				if (StrContains(sample, SoundHook[i], false) != -1 && BlockSound(clients[j], SoundHook[i]))
+				if (StrContains(sample, SoundHook[i], false) != -1)
 				{
 					//PrintToServer("STOPPING SOUND: %s - %i", sample, entity);
 					return Plugin_Stop;
@@ -1978,10 +1925,10 @@ Action eInventory(Event event, const char[] name, bool dontBroadcast)
 	if (cEnabled.BoolValue)
 	{
 		int client = GetClientOfUserId(event.GetInt("userid"));
-		if (IsValidClient(client))
+		if (IsValidClient(client) && IsClientInWorld(client))
 		{
-			pMaxClip[client][Primary] = GetClip(client, 0);
-			pMaxClip[client][Secondary] = GetClip(client, 1);
+			iMaxClip[client][Primary] = GetClip(client, 0);
+			iMaxClip[client][Secondary] = GetClip(client, 1);
 		}
 	}
 }
@@ -2057,8 +2004,10 @@ Action eSpawn(Event event, const char[] name, bool dontBroadcast)
 {
 	int client = GetClientOfUserId(event.GetInt("userid"));
 	TFTeam team = TF2_GetClientTeam(client);
+	TFClassType class = TF2_GetPlayerClass(client);
 	if (cEnabled.BoolValue)
 	{
+		//LoadDB(client);
 		if (!IsValidClient(client) || team == TFTeam_Spectator) { return; }
 		if (TF2_GetPlayerClass(client) == TFClass_Soldier)
 		{
@@ -2071,6 +2020,11 @@ Action eSpawn(Event event, const char[] name, bool dontBroadcast)
 		}
 		TF2_RemoveAllWeapons(client);
 		TF2_RegeneratePlayer(client);
+		
+		float f[3], a[3];
+		f[0] = SaveList[client][class][team][0]; a[0] = 0.0;
+		f[1] = SaveList[client][class][team][1]; a[1] = SaveList[client][class][team][3]; 
+		f[2] = SaveList[client][class][team][2]; a[2] = 0.0;
 
 		if (!bMapHasRegen)
 		{
@@ -2082,8 +2036,10 @@ Action eSpawn(Event event, const char[] name, bool dontBroadcast)
 				CPrintToChat(client, "%s Regen has been %sturned on%s for you.", TAG, T1, T2);
 			}
 		}
-		if (fOrigin[client][0] != 0.0)
-			TeleportEntity(client, fOrigin[client], fAngles[client], fVelocity);
+		if (!bUsedReset[client] && SaveList[client][class][team][0] != 0.0)
+			TeleportEntity(client, f, a, fVelocity);
+		else
+			bUsedReset[client] = false;
 	}
 }
 /******************************************************
@@ -2105,12 +2061,7 @@ void DBCheck()
  					"`MsgSaved`	INTEGER," ...
 					"`MsgTeleport`	INTEGER," ...
 					"`MsgAdverts`	INTEGER," ...
-					"`MsgCapPoints`	INTEGER," ...
-					"`SndFall`	INTEGER," ...
-					"`SndPain`	INTEGER," ...
-					"`SnfFlesh`	INTEGER," ...
-					"`SndRegen`	INTEGER," ...
-					"`SndJump`	INTEGER);", Ai);
+					"`MsgCapPoints`	INTEGER);", Ai);
 	dTFJump.Query(OnDefault, query, 1, DBPrio_High);
 	dTFJump.Format(query, sizeof query, 
 					"CREATE TABLE IF NOT EXISTS  `Maps` ( " ...
@@ -2138,7 +2089,7 @@ void DBCheck()
 					"`SteamID` TEXT NOT NULL," ...
 					"`Map` TEXT," ...
 					"`cap_points_reached` INTEGER," ...
-					"`cap_points_max` INTEGER)", Ai);
+					"`Beaten` INTEGER)", Ai);
 	dTFJump.Query(OnDefault, query, 4, DBPrio_High);
 	dTFJump.Format(query, sizeof query,
 					"CREATE TABLE IF NOT EXISTS `Points` ( " ...
@@ -2157,10 +2108,10 @@ void DBCheck()
 					"`Map`	TEXT NOT NULL," ...
 					"`Class`	INTEGER NOT NULL," ...
 					"`Team`	INTEGER NOT NULL," ...
-					"`F1`	FLOAT NOT NULL," ...
-					"`F2`	FLOAT NOT NULL," ...
-					"`F3`	FLOAT NOT NULL," ...
-					"`A1`	FLOAT);", Ai);
+					"`F1` FLOAT NOT NULL," ...
+					"`F2` FLOAT NOT NULL," ...
+					"`F3` FLOAT NOT NULL," ...
+					"`A1` FLOAT);", Ai);
 	dTFJump.Query(OnDefault, query, 6, DBPrio_High);
 }
 void UpdateProfile(int client, int Type)
@@ -2189,15 +2140,6 @@ void UpdateProfile(int client, int Type)
 							bMessages[client][Msg_CapPoint], SteamId[client]);
 			dTFJump.Query(OnDefault, query);
 			DebugLog("Updated profile (message settings) for %N", client);
-		}
-		case 2:
-		{
-			// Sounds
-			dTFJump.Format(query, sizeof query, "UPDATE `Profiles` SET SndFall=%i, SndFlesh=%i, SndRegen=%i, SndPain=%i, SndJump=%i WHERE SteamId = '%s'",
-							bSounds[client][SND_FALL], bSounds[client][SND_FLESH], bSounds[client][SND_REGEN], 
-							bSounds[client][SND_PAIN], bSounds[client][SND_JUMP], SteamId[client]);
-			dTFJump.Query(OnDefault, query);
-			DebugLog("Updated profile (sound settings) for %N", client);
 		}
 	}
 }
@@ -2234,36 +2176,38 @@ void SaveDB(int client)
 {
 	char query[512];
 	int Team = GetClientTeam(client), Class = view_as<int>(TF2_GetPlayerClass(client));
-	dTFJump.Format(query, sizeof query, "SELECT * FROM `Saves` WHERE steamID = '%s' AND Team = '%i' AND Class = '%i' AND Map = '%s'", 
+	dTFJump.Format(query, sizeof query, "SELECT * FROM `Saves` WHERE SteamId = '%s' AND Team = '%i' AND Class = '%i' AND Map = '%s'", 
 					SteamId[client], Team, Class, MapName);
 	dTFJump.Query(OnSaveDB, query, client);	
 }
 void SaveDB_Update(int client)
 {
 	char query[512];
-	int Team = GetClientTeam(client), Class = view_as<int>(TF2_GetPlayerClass(client));
+	int team = GetClientTeam(client), class = view_as<int>(TF2_GetPlayerClass(client));
 
 	dTFJump.Format(query, sizeof query, "UPDATE `Saves` SET F1 = '%f', F2 = '%f', F3 = '%f', A1 = '%f' where SteamId = '%s' AND Team = '%i' AND Class = '%i' AND Map = '%s'", 
-					fOrigin[client][0], fOrigin[client][1], fOrigin[client][2], fAngles[client][1],	SteamId[client], Team, Class, MapName);
+					SaveList[client][class][team][0], SaveList[client][class][team][1], SaveList[client][class][team][2],
+					SaveList[client][class][team][3], SteamId[client], team, class, MapName);
 	dTFJump.Query(OnDefault, query);
 }
 void SaveDB_Insert(int client)
 {
 	char query[1024];
-	int Team = GetClientTeam(client), Class = view_as<int>(TF2_GetPlayerClass(client));
+	int team = GetClientTeam(client), class = view_as<int>(TF2_GetPlayerClass(client));
 
-	dTFJump.Format(query, sizeof query, "INSERT INTO `Saves` VALUES(null, '%s', '%s', '%i', '%i', '%s', '%f', '%f', '%f')", 
-				SteamId[client], MapName, Class, Team, fOrigin[client][0], fOrigin[client][1], fOrigin[client][2], fAngles[client][1]);
+	dTFJump.Format(query, sizeof query, "INSERT INTO `Saves` VALUES(null, '%s', '%s', '%i', '%i', '%f', '%f', '%f', '%f')", 
+				SteamId[client], MapName, class, team, SaveList[client][class][team][0], SaveList[client][class][team][1],
+				SaveList[client][class][team][2], SaveList[client][class][team][3]);
 	dTFJump.Query(OnDefault, query);
 					
 }
 void LoadDB(int client)
 {
 	char query[512];
-	int Team = GetClientTeam(client), Class = view_as<int>(TF2_GetPlayerClass(client));
-	dTFJump.Format(query, sizeof query, "SELECT * FROM `Saves` WHERE SteamId = '%s' AND Team = '%i' AND Class = '%i' AND Map = '%s'", 
-					SteamId[client], Team, Class, MapName);
-	dTFJump.Query(OnLoadDB, query, client);	
+	//int Team = GetClientTeam(client), Class = view_as<int>(TF2_GetPlayerClass(client));
+	dTFJump.Format(query, sizeof query, "SELECT * FROM `Saves` WHERE SteamId = '%s' AND Map = '%s'",
+					SteamId[client], MapName);
+	dTFJump.Query(OnLoadDB, query, client);
 }
 /******************************************************
 					Database Callbacks				  *
@@ -2277,7 +2221,6 @@ public void OnDatabaseConnect(Database db, const char[] error, any data)
 	}
 	DebugLog("Database connected.");
 	dTFJump = db; DBCheck();
-	bConnected = true;
 
 	if (bLate)
 	{
@@ -2348,15 +2291,9 @@ public void OnCheckProfile(Database db, DBResultSet results, const char[] error,
 		bMessages[client][Msg_Teleport] = view_as<bool>(results.FetchInt(5));
 		bMessages[client][Msg_Adverts] = view_as<bool>(results.FetchInt(6));
 		bMessages[client][Msg_CapPoint] = view_as<bool>(results.FetchInt(7));
-		// Sounds
-		bSounds[client][SND_FALL] = view_as<bool>(results.FetchInt(8));
-		bSounds[client][SND_PAIN] = view_as<bool>(results.FetchInt(9));
-		bSounds[client][SND_FLESH] = view_as<bool>(results.FetchInt(10));
-		bSounds[client][SND_REGEN] = view_as<bool>(results.FetchInt(11));
-		bSounds[client][SND_JUMP] = view_as<bool>(results.FetchInt(12));
 	} else {
 		char query[512];
-		dTFJump.Format(query, sizeof query, "INSERT INTO `Profiles` VALUES(null, '%s', 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0);", SteamId[client]);
+		dTFJump.Format(query, sizeof query, "INSERT INTO `Profiles` VALUES(null, '%s', 0, 1, 1, 1, 1, 1);", SteamId[client]);
 		dTFJump.Query(OnDefault, query);
 	}
 }
@@ -2418,17 +2355,115 @@ public void OnLoadDB(Database db, DBResultSet results, const char[] error, any d
 { 
 	if (db == null || results == null) 
 	{ 
-		LogError("%s", error); 
+		LogError("%s", error);
+		return;
 	} 
 	if (results.RowCount > 0)
 	{
-		results.FetchRow();
-		fOrigin[data][0] = results.FetchFloat(5);
-		fOrigin[data][1] = results.FetchFloat(6);
-		fOrigin[data][2] = results.FetchFloat(7);
-
-		fAngles[data][0] = 0.0;
-		fAngles[data][1] = results.FetchFloat(8);
-		fAngles[data][2] = 0.0;
+		// SaveList[MAX][TCLASS][5][4]
+		// 3 class 4 team
+		while (results.FetchRow())
+		{
+			//results.FetchRow();
+			int team = results.FetchInt(4), class = results.FetchInt(3);
+			SaveList[data][class][team][0] = results.FetchFloat(5);
+			SaveList[data][class][team][1] = results.FetchFloat(6);
+			SaveList[data][class][team][2] = results.FetchFloat(7);
+			SaveList[data][class][team][3] = results.FetchFloat(8);
+			DebugLog("%f %f %f %f", SaveList[data][class][team][0], SaveList[data][class][team][1], SaveList[data][class][team][2], SaveList[data][class][team][3]);
+		}
+		DebugLog("Saves loaded for %N", data);
 	}
 }
+public void OnJumpListCreate(Database db, DBResultSet results, const char[] error, any data)
+{
+	if (db == null || results == null) 
+	{ 
+		LogError("%s", error);
+		return;
+	}
+	int client = data;
+	char name[64];
+	if (results.RowCount > 0)
+	{
+		Menu mJumpList = new Menu(OnJumpList);
+		mJumpList.SetTitle("Select a jump");
+		while (results.FetchRow())
+		{
+			results.FetchString(2, name, sizeof name);
+			mJumpList.AddItem(name, name);
+		}
+		mJumpList.Display(client, MENU_TIME_FOREVER);
+	}
+}
+/******************************************************
+						Stats				  		  *
+******************************************************/
+stock void Stats_SaveData(int client)
+{
+	char query[1024];
+	dTFJump.Format(query, sizeof query, "SELECT * FROM Stats WHERE SteamId='%s' AND Map = '%s'", SteamId[client], MapName);
+	dTFJump.Query(OnStatsSaveData, query, client);
+}
+stock void Stats_CreateData(int client)
+{
+	char query[1024];
+	dTFJump.Format(query, sizeof query, "INSERT INTO Stats values(null, '%s', '%s', '0', '%i')", SteamId[client], MapName, iControlPoints);
+	dTFJump.Query(OnDefault, query, client);
+}
+
+stock void Stats_LoadPlayer(int client)
+{
+	char query[1024];
+	dTFJump.Format(query, sizeof query, "SELECT * FROM `Stats` WHERE SteamId = '%s' AND Map = '%s'", SteamId[client], MapName);
+	dTFJump.Query(OnStatsLoadData, query, client);
+}
+// Callbacks
+public void OnStatsLoadData(Database db, DBResultSet results, const char[] error, any data)
+{
+	if (db == null || results == null)
+	{ 
+		LogError("OnStatsSaveData - Query failed! %s", error); 
+		return;
+	}
+	int client = data;
+	if (results.RowCount > 0)
+	{
+		results.FetchRow();
+		bHasRecord[client] = true;
+		//iStatsReached[client] = results.FetchInt(3);
+		
+		int iMapCount = 0, iMaxResults = 0;
+		iMaxResults = results.RowCount;
+	
+		for (int i=1;i<=iMaxResults;i++)
+		{
+			//PrintToServer("iReached: %i iMax %i", iReached, iMax);
+			if (iTouched[client] == iControlPoints)
+			{
+				iMapCount++;
+			}
+		}
+	} else {
+		Stats_CreateData(client);
+		bHasRecord[client] = true;
+	}
+	return;
+}
+public void OnStatsSaveData(Database db, DBResultSet results, const char[] error, any data)
+{
+	if (db == null || results == null)
+	{ 
+		LogError("OnStatsSaveData - Query failed! %s", error); 
+		return;
+	}
+	char query[1024]; int client = data;
+	if (results.RowCount > 0)
+	{
+		dTFJump.Format(query, sizeof query, "UPDATE Stats SET cap_points_reached = %i WHERE SteamId = '%s' AND Map = '%s'",
+											iTouched[client], SteamId[client], MapName);
+		dTFJump.Query(OnStatsSaveData, query, client);
+	}
+	return;
+}
+//PrintToChat(client, "%s You have beat %s%i%%%s of the maps you have played.", TAG, T1, iPercent, T2);
